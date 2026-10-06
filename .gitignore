@@ -1,0 +1,3 @@
+# Written by Claude Code on every load of the mod: this build's API declarations and the tsconfig that points at them.
+.claude-plugin/types/
+/tsconfig.json

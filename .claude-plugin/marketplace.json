@@ -1,0 +1,14 @@
+{
+  "name": "session-links",
+  "description": "Claude Code mods: session-links, the band of every link your session mentions.",
+  "owner": {
+    "name": "samaphp"
+  },
+  "plugins": [
+    {
+      "name": "session-links",
+      "source": "./",
+      "description": "Every link your session mentions, in one row above the prompt: pin, dismiss, open in the browser or read in a pane; saved with the session."
+    }
+  ]
+}

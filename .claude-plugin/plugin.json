@@ -1,0 +1,7 @@
+{
+  "name": "session-links",
+  "version": "0.1.0",
+  "description": "Every URL mentioned in the session, floating in a compact band above the prompt: pin it, dismiss it, open it in the browser or read it in a pane. Decisions survive exit and resume.",
+  "author": { "name": "samaphp" },
+  "types": "./types/index.d.ts"
+}
