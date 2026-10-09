@@ -2,15 +2,15 @@
 
 Every link your session mentions, in one row above the prompt.
 
-Paste a docs page, let Claude point you at a pull request, start a dev server: each address becomes a chip above the prompt the moment it is mentioned. Pin the ones you keep coming back to, dismiss the noise, open any of them in your browser or read it in a pane without leaving the terminal. What you pin and dismiss is saved with the session, so it is exactly as you left it when you resume.
+Paste a docs page, let Claude point you at a pull request, start a dev server: each address becomes a chip above the prompt the moment it is mentioned. Pin the ones you keep coming back to, dismiss the noise, open any of them in your browser. What you pin and dismiss is saved with the session, so it is exactly as you left it when you resume.
 
 ```
-▎ ★  docs.claude.com  read   ▎ ☆  github.com/pull/12  read  ×   ▎ ☆  localhost:5173  read  ×    ≡
+▎ ★  docs.claude.com   ▎ ☆  github.com/pull/12  ×   ▎ ☆  localhost:5173  ×    ≡
 ```
 
 ## Why
 
-A long session scatters addresses through the transcript: the page you were reading, the issue Claude found, the server it started. Scrolling back to find them again is the tax this mod removes. The band stays out of your way (nothing is drawn while there is no link), the links that matter stay pinned, and the model never sees any of it: the mod costs zero tokens.
+A long session scatters addresses through the transcript: the page you were reading, the issue Claude found, the server it started. Scrolling back to find them again is the tax this mod removes. The band stays out of your way (nothing is drawn while there is no link), the links that matter stay pinned, and the model never sees any of it: the mod costs zero tokens. It never fetches anything either: no address is requested until you open it, and then it is your browser that does.
 
 ## Install
 
@@ -37,7 +37,6 @@ Start `claude`, mention a link, and the band appears. To remove it: `claude plug
 |---|---|
 | `☆` / `★` | Pin or unpin. A pinned link takes the first seat and stays for the whole session; it shows no `×`, so losing it takes an unpin first. |
 | the address | Opens the link in your browser. |
-| `read` | Reads the page in a pane inside Claude Code. |
 | `×` | Dismisses the link. The first press asks (`dismiss?`), the second confirms; left alone, it lapses. A dismissed link stays hidden even when mentioned again, and can be restored from `/links`. |
 | `≡` / `+N more` | Opens the full list. |
 
@@ -47,9 +46,7 @@ Keyboard: `ctrl+x` then `Tab` moves into the band; `Tab`, `Shift+Tab` and the ar
 
 ## `/links`
 
-The pane lists every link of the session in three groups, pinned, floating and dismissed, each with `open`, `read`, `pin`, `dismiss` and `copy`, and `restore` for the dismissed ones. A text box at the top takes an address you type or paste; press `Enter` and it is added pinned (the `https://` can be left off).
-
-`read` fetches the page and shows its text: headings, paragraphs, links, lists and code. Links inside the page can be followed in the pane, with a way back. Nothing is fetched until you press `read`; a page is never fetched because it was mentioned, and what comes back is drawn in the pane only.
+The pane lists every link of the session in three groups, pinned, floating and dismissed, each with `open`, `pin`, `dismiss` and `copy`, and `restore` for the dismissed ones. A text box at the top takes an address you type or paste; press `Enter` and it is added pinned (the `https://` can be left off).
 
 ## What is collected
 
@@ -69,7 +66,6 @@ A Claude Code mod is a plugin whose hooks are TypeScript functions running insid
 
 - `hooks/register.tsx` watches every row the conversation keeps, draws the band and the pane, and registers `/links`. Decisions are written through to the plugin's store on every change, keyed by session id, so a resume restores them exactly.
 - `hooks/links.ts` finds addresses in text, keeps the list within its cap, orders it, and writes the labels.
-- `hooks/reader.ts` turns a fetched page into markdown in one pass over its tags and text, with control bytes and embedded media stripped.
 - `types/index.d.ts` is the state contract the engine checks the hooks against.
 - `tests/` presses the real band and pane through Claude Code's own test kit.
 

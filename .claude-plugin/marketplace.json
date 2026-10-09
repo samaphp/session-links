@@ -8,7 +8,7 @@
     {
       "name": "session-links",
       "source": "./",
-      "description": "Every link your session mentions, in one row above the prompt: pin, dismiss, open in the browser or read in a pane; saved with the session."
+      "description": "Every link your session mentions, in one row above the prompt: pin, dismiss, open in the browser; saved with the session."
     }
   ]
 }

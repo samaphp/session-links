@@ -3,30 +3,17 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock, Mounted } from 'claude-code/testing'
 
 import { extractUrls, MAX_LINKS, mergeMentions } from '../hooks/links'
-import { renderPage } from '../hooks/reader'
 import type { Link, SessionRecord } from '../types'
 
 const DOCS = 'https://claude.dev/blog/getting-started-with-claude-code-mods/'
 const PULL = 'https://github.com/acme/app/pull/12'
 const LOCAL = 'http://localhost:5173/'
-const PAGE = [
-  '<html><head><title>Mods &amp; you</title></head><body>',
-  '<nav><a href="/">Home</a></nav>',
-  '<main><h1>Getting started</h1>',
-  '<p>A mod is a <strong>small file</strong>. See <a href="/next">the next page</a>.</p>',
-  '<pre><code>claude --plugin-dir ./mod</code></pre>',
-  '<script>alert(1)</script></main></body></html>',
-].join('')
-
 type World = {
   clock: MockClock
   sessionId: string
   store: Map<string, unknown>
   messages: { role: 'user' | 'assistant'; text: string; toolUses: never[] }[]
   ran: string[][]
-  page: string
-  status: number
-  fetched: string[]
   toasts: string[]
   logged: string[]
   copied: string[]
@@ -46,9 +33,6 @@ function world(on: On, store?: Record<string, unknown>, env: Record<string, stri
     store: new Map(Object.entries(store ?? {})),
     messages: [],
     ran: [],
-    page: PAGE,
-    status: 200,
-    fetched: [],
     toasts: [],
     logged: [],
     copied: [],
@@ -116,18 +100,6 @@ function world(on: On, store?: Record<string, unknown>, env: Record<string, stri
 
     return { value: { exitCode: outcome, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('http.fetch', ($, e) => {
-    w.fetched.push((e as { url: string }).url)
-
-    return {
-      value: {
-        status: w.status,
-        ok: w.status < 300,
-        headers: { 'content-type': 'text/html; charset=utf-8' },
-        text: w.page,
-      },
-    }
-  })
 
   return w
 }
@@ -191,7 +163,6 @@ describe('collecting', () => {
 
     expect(labels).toEqual([' github.com ', ' localhost:5173 ', ' claude.dev '])
     expect((await ui.find({ key: `pin:${DOCS}` }))?.props.label).toBe(' ☆ ')
-    expect((await ui.find({ key: `read:${DOCS}` }))?.props.label).toBe(' read ')
     expect((await ui.find({ key: `drop:${DOCS}` }))?.props.label).toBe(' × ')
     await ui.unmount()
   })
@@ -488,7 +459,7 @@ describe('adding by hand', () => {
 
     expect(labels.filter(label => !(label.startsWith(' ') && label.endsWith(' ')))).toEqual([])
     // The pane's close mark is the engine's own, on the frame: the mod draws none beside it.
-    expect(labels).toEqual([' open ', ' read ', ' pin ', ' dismiss ', ' copy ', ' restore '])
+    expect(labels).toEqual([' open ', ' pin ', ' dismiss ', ' copy ', ' restore '])
     await ui.unmount()
   })
 })
@@ -617,177 +588,6 @@ describe('opening', () => {
     await ui.unmount()
   })
 
-  test('nothing is fetched until the person asks to read; then the pane shows the page', async ($, on) => {
-    const w = world(on)
-    await start($)
-    await say($, 'prompt', DOCS)
-    expect(w.fetched).toEqual([])
-
-    const strip = await band($)
-    await strip.press({ key: `read:${DOCS}` })
-    await strip.unmount()
-    expect(w.fetched).toEqual([DOCS])
-
-    const ui = await pane($)
-    const page = await ui.find({ type: 'Markdown' })
-
-    expect(await ui.find({ type: 'Text', text: 'Mods & you' })).toBeDefined()
-    expect(page?.props.text).toContain('# Getting started')
-    expect(page?.props.text).toContain('**small file**')
-    expect(page?.props.text).toContain('[the next page](https://claude.dev/next)')
-    expect(page?.props.text).toContain('```\nclaude --plugin-dir ./mod\n```')
-    expect(page?.props.text).not.toMatch(/alert|Home/)
-    // The title the page gave is kept with the link.
-    expect((saved(w))[0]?.title).toBe('Mods & you')
-
-    await ui.press({ key: 'page', link: { href: 'https://claude.dev/next' } })
-    expect(w.fetched.at(-1)).toBe('https://claude.dev/next')
-    expect((await ui.find({ key: 'back' }))?.props.label).toBe(' ‹ back ')
-    await ui.press({ key: 'back' })
-    expect(w.fetched.at(-1)).toBe(DOCS)
-    await ui.press({ key: 'back' })
-    expect(await ui.find({ type: 'Text', text: /1 floating/ })).toBeDefined()
-    await ui.unmount()
-  })
-
-  test('a missing page is said to be missing, in words', async ($, on) => {
-    const w = world(on)
-
-    w.status = 404
-    await start($)
-    await say($, 'prompt', PULL)
-
-    const strip = await band($)
-    await strip.press({ key: `read:${PULL}` })
-    await strip.unmount()
-
-    const ui = await pane($)
-
-    expect(await ui.find({ type: 'Text', text: 'There is no page at this address (the server answered 404).' })).toBeDefined()
-    expect(await ui.find({ type: 'Markdown' })).toBeUndefined()
-    await ui.unmount()
-  })
-
-  test('a page cannot drive the terminal, load media, or send the reader off the web', async ($, on) => {
-    const w = world(on)
-
-    w.page = [
-      '<html><head><title>Sale&#27;[2J now</title></head><body><main>',
-      '<p>Pixel: ![x](https://tracker.example/p.png) and [local](file:///etc/hosts) &#7;bell</p>',
-      '</main></body></html>',
-    ].join('')
-    await start($)
-    await say($, 'prompt', DOCS)
-
-    const strip = await band($)
-    await strip.press({ key: `read:${DOCS}` })
-    await strip.unmount()
-
-    const ui = await pane($)
-    const text = String((await ui.find({ type: 'Markdown' }))?.props.text)
-
-    expect(await ui.find({ type: 'Text', text: 'Sale[2J now' })).toBeDefined()
-    expect(text).not.toMatch(/[\u0000-\u0008\u000b-\u001f]/)
-    expect(text).not.toContain('![')
-    await ui.press({ key: 'page', link: { href: 'file:///etc/hosts' } })
-    // A web address tucked inside another scheme's address is still that other scheme.
-    await ui.press({ key: 'page', link: { href: 'file:///etc/passwd#https://a.example.com/x' } })
-    await ui.press({ key: 'page', link: { href: 'javascript:alert(1)//https://a.example.com/x' } })
-    expect(w.fetched).toEqual([DOCS])
-    expect(w.toasts.at(-1)).toBe('The reader opens http and https addresses only')
-    await ui.unmount()
-  })
-})
-
-describe('the reader, by kind of page', () => {
-  const at = 'https://a.example.com/dir/page'
-  const read = (type: string, body: string, url = at) => renderPage(url, type, body) as { title: string; markdown: string }
-
-  test('a page is read as its headings, prose, links, lists and code; its furniture and scripts are left out', () => {
-    const page = read(
-      'text/html',
-      '<html><head><title>T &amp; t</title><style>p{}</style></head><body><nav>menu</nav><h2>Head <a href="x">link</a></h2>' +
-        '<p>One <b> bold </b> and <code>&lt;div&gt;</code> a &lt; b<br>next</p><ul><li><p>item</p></li><li>two</li></ul>' +
-        '<form><button>go</button></form><pre>a\n  b</pre><b>open</body></html>',
-    )
-
-    expect(page.title).toBe('T & t')
-    expect(page.markdown).toBe(
-      '## Head [link](https://a.example.com/dir/x)\n\nOne **bold** and `<div>` a < b\nnext\n\n- item\n\n- two\n\n```\na\n  b\n```\n\nopen',
-    )
-  })
-
-  test('JSON is laid out, and JSON that does not parse is shown as sent', () => {
-    expect(read('application/json', '{"a":[1,2]}').markdown).toBe('```json\n{\n  "a": [\n    1,\n    2\n  ]\n}\n```')
-    expect(read('application/problem+json', '{oops').markdown).toBe('```json\n{oops\n```')
-  })
-
-  test('markdown is passed through without its images; plain text keeps its shape', () => {
-    expect(read('text/markdown', '# Hi\n\n![x](https://t.example.com/p.png)').markdown).toBe('# Hi\n\n[x](https://t.example.com/p.png)')
-    expect(read('application/octet-stream', '# Notes', 'https://a.example.com/README.md').markdown).toBe('# Notes')
-    expect(read('text/plain', 'a  b\n  c').markdown).toBe('```\na  b\n  c\n```')
-    expect(read('', 'no type at all').title).toBe('page')
-  })
-
-  test('what is not text is declined with its kind', () => {
-    expect(renderPage(at, 'application/pdf', '%PDF')).toEqual({
-      reason: 'This address serves application/pdf, which reads best in the browser.',
-    })
-  })
-
-  test('a long page is cut at a paragraph and says so; a page with almost no text says why', () => {
-    const long = read('text/html', `<html><body><main>${'<p>word word word word word word word word</p>'.repeat(2000)}</main></body></html>`)
-
-    expect(long.markdown.length).toBeLessThan(30_200)
-    expect(long.markdown.endsWith('*The page goes on. Open it in the browser for the rest.*')).toBe(true)
-    expect(read('text/html', '<html><body><div id="app"></div></body></html>').markdown).toContain('likely draws itself with JavaScript')
-  })
-
-  test('a script never reaches the reading, whatever stands before it or however it is spelled', () => {
-    const page = (before: string, script: string) =>
-      read('text/html', `<html><body><p>${before}</p>${script}<p>after</p></body></html>`).markdown
-
-    // `İ` is one character that lowercases to two: a search in a lowercased copy lands one place off.
-    for (const before of ['Istanbul', 'İstanbul', 'İİİ İzmir']) {
-      const markdown = page(before, '<script>var a = 1 < 2;</script>')
-
-      expect(markdown).toContain(before)
-      expect(markdown).toContain('after')
-      expect(markdown).not.toContain('var a')
-    }
-
-    expect(page('caps', '<SCRIPT>var b = 2</SCRIPT><Style>.c { }</sTyLe>')).not.toMatch(/var b|\.c \{/)
-  })
-
-  test('a page cut off inside a script or a style shows none of the code', () => {
-    const cut = (tail: string) => read('text/html', `<html><body><p>Hello</p>${tail}`).markdown
-
-    expect(cut('<script>window.__DATA__ = {"token":"abc"')).not.toContain('token')
-    expect(cut('<style>.a { color: red')).not.toContain('color')
-    expect(cut('<script>window.__DATA__ = {"token":"abc"')).toContain('Hello')
-  })
-
-  test('a page built to be slow is read in one pass', () => {
-    const shapes = [
-      // Tens of thousands of elements being left out at once, and an end for each closing tag to look up.
-      `${'<svg>'.repeat(65_000)}${'</b>'.repeat(65_000)}</svg>`,
-      `${'<form><svg><nav>'.repeat(30_000)}${'</nav></b>'.repeat(30_000)}</svg></form>`,
-      '<b>x'.repeat(150_000),
-      '<a href="/x">y'.repeat(43_000),
-      '<pre>x<h1>y'.repeat(55_000),
-      '<main>x'.repeat(86_000),
-      '<!--x'.repeat(120_000),
-      '<'.repeat(600_000),
-    ]
-
-    for (const shape of shapes) {
-      const started = Date.now()
-
-      read('text/html', `<html><body>${shape}`)
-      // Each of these took seconds when a pattern searched for every open tag's partner.
-      expect(Date.now() - started).toBeLessThan(1_000)
-    }
-  })
 })
 
 describe('limits', () => {

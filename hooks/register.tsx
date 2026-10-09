@@ -1,10 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, RenderSurface } from 'claude-code'
 
-import type { Link, LinkSource, LinkStatus, PaneView, ReaderPage, SessionRecord } from '../types'
+import type { Link, LinkSource, LinkStatus, SessionRecord } from '../types'
 
 import { bandOrder, byPriority, chipLabels, clip, displayOf, extractUrls, labelOf, mergeMentions } from './links'
-import { renderPage } from './reader'
 
 const PANE = 'links'
 // `$.store` holds 4 MiB across every session; past this many the oldest records leave.
@@ -13,15 +12,14 @@ const MAX_SESSIONS = 300
 // exactly would repeat that read at every start once the store is full, so
 // it trims this far below and the read comes once in that many new sessions.
 const SESSION_SLACK = 50
-const LIST: PaneView = { reader: null, trail: [] }
-// One chip is `▎ ☆  domain  read  × `. Each control carries a cell of air on
-// each side inside its own label: the highlight under the pointer or the focus
-// is the label's width, and one bare glyph made a target too tight to see or
-// to hit. A pinned chip is `▎ ★  domain  read `: a lock has no dismiss beside it,
-// so losing a link the person kept takes an unpin first. Both widths count the
+// One chip is `▎ ☆  domain  × `. Each control carries a cell of air on each
+// side inside its own label: the highlight under the pointer or the focus is
+// the label's width, and one bare glyph made a target too tight to see or to
+// hit. A pinned chip is `▎ ★  domain `: a lock has no dismiss beside it, so
+// losing a link the person kept takes an unpin first. Both widths count the
 // gap to the next chip.
-const FLOATING_CELLS = 16
-const PINNED_CELLS = 13
+const FLOATING_CELLS = 10
+const PINNED_CELLS = 7
 // A dismissal takes two presses. The first turns the cross into this question
 // on the chip itself, so what is about to go is named where the person is
 // looking; the second, on the same control, dismisses. Left alone, the
@@ -36,8 +34,6 @@ const ROW_TAIL = 3
 // The band grows downward before it hides a link: three rows show a busy
 // session whole, and the person tidies by dismissing what they no longer need.
 const MAX_ROWS = 3
-const READER_ACCEPT =
-  'text/html,application/xhtml+xml,text/markdown;q=0.9,text/plain;q=0.8,application/json;q=0.8,*/*;q=0.5'
 // xdg-open stays alive for as long as the browser it started does, and
 // `$.process.run` waits on a child's output: so it is detached, its output
 // dropped, and the address rides as an argument, never as script text. An
@@ -61,14 +57,13 @@ const DETACHED_XDG_OPEN = [
 const sessionId = atom({ plugin: 'session-links', key: 'sessionId' } as const, '')
 const links = atom({ plugin: 'session-links', key: 'links' } as const, [])
 const freshSince = atom({ plugin: 'session-links', key: 'freshSince' } as const, 0)
-const view = atom({ plugin: 'session-links', key: 'view' } as const, LIST)
 const armed = atom({ plugin: 'session-links', key: 'armed' } as const, '')
 
 type Engine = EngineInterface
 // `id` is the link's address: it names the link's controls wherever the chip
 // sits, so a key stays with its link when the row reorders or the cap trims.
 type Chip = { link: Link; id: string; label: string }
-type Kit = Pick<Elements[RenderSurface], 'Box' | 'Button' | 'Link' | 'Markdown' | 'Text'> & {
+type Kit = Pick<Elements[RenderSurface], 'Box' | 'Button' | 'Link' | 'Text'> & {
   // The mobile app draws no text field yet: there the list goes without its add box.
   Input?: Elements['terminal']['Input']
 }
@@ -165,7 +160,6 @@ async function load($: Engine): Promise<void> {
   const now = await $.clock.now()
 
   await update($, links, () => restored)
-  await update($, view, () => LIST)
   await update($, armed, () => '')
   // Nothing restored is news: only what arrives from here on is drawn fresh.
   await update($, freshSince, () => now)
@@ -234,7 +228,7 @@ async function capture($: Engine, row: Row, source: LinkSource): Promise<void> {
   await save($)
 }
 
-/** Also seats a page the conversation never mentioned, when the person pins it from the reader. */
+/** Also seats an address the conversation never mentioned, when the person adds it by hand. */
 async function setStatus($: Engine, url: string, status: LinkStatus): Promise<void> {
   const now = await $.clock.now()
 
@@ -353,116 +347,15 @@ async function openInBrowser($: Engine, url: string, surface: RenderSurface): Pr
  * The engine seats a pane at any width only when the open answers the
  * person's own press or command. One that arrives after that press has been
  * answered counts as the mod's own idea and waits for a 110-column terminal
- * ("waiting for room"). So a caller asks for the pane FIRST, before any other
- * await, and every press handler hands its promise back so the press stays
- * open until then. `const opening = openPane($)` ahead of the other awaits
- * is that rule, not an oversight: folding it into the awaits below breaks
- * the pane on a narrow terminal.
+ * ("waiting for room"). So every press handler hands its promise back
+ * (`() => openPane($)`, never `() => void openPane($)`), and the press stays
+ * open until the pane is asked for.
  */
 async function openPane($: Engine): Promise<void> {
   const opened = await $.ui.open({ id: PANE, title: 'Links', focus: true })
 
   if (!opened.isPlaced) {
     $.ui.toast(`The links pane is waiting for room: ${opened.reason}`)
-  }
-}
-
-async function showList($: Engine): Promise<void> {
-  const opening = openPane($)
-
-  await update($, view, () => LIST)
-  await opening
-}
-
-/**
- * A bare status code read as "the reader cannot open pages" to the person it
- * was first shown to: the reason says what the code means for this address.
- */
-function refusalOf(status: number): string {
-  if (status === 404 || status === 410) {
-    return `There is no page at this address (the server answered ${status}).`
-  }
-
-  if (status === 401 || status === 403) {
-    return `This page wants a sign-in, which the reader does not have (the server answered ${status}).`
-  }
-
-  if (status >= 500) {
-    return `The site is failing right now (the server answered ${status}).`
-  }
-
-  return `The server would not hand the page over (it answered ${status}).`
-}
-
-async function fetchPage($: Engine, url: string): Promise<ReaderPage> {
-  try {
-    const got = await $.http.fetch(url, {
-      headers: { accept: READER_ACCEPT, 'user-agent': `Mozilla/5.0 (compatible; ${$.plugin.name}-reader)` },
-    })
-
-    if (!got.ok) {
-      return { url, phase: 'failed', reason: refusalOf(got.status) }
-    }
-
-    const page = renderPage(url, got.headers['content-type'] ?? '', got.text)
-
-    return 'reason' in page ? { url, phase: 'failed', reason: page.reason } : { url, phase: 'ready', ...page }
-  } catch (error) {
-    return { url, phase: 'failed', reason: `The page could not be fetched: ${reasonOf(error)}` }
-  }
-}
-
-/**
- * A page's text can spell a link of any scheme, and can hide a web address
- * inside another one (`file:///etc/passwd#https://host/x`). The reader follows
- * the web's two schemes only, so the whole address is judged, never a part of it.
- */
-function webAddress(text: string): string | null {
-  if (!URL.canParse(text)) {
-    return null
-  }
-
-  const { protocol, href } = new URL(text)
-
-  return protocol === 'https:' || protocol === 'http:' ? href : null
-}
-
-/**
- * The one request this mod ever sends, and only on the person's own press:
- * a link is never fetched because it was mentioned (it may be a one-time
- * sign-in or unsubscribe address, and a GET would spend it).
- */
-async function showPage($: Engine, asked: string, trail: string[]): Promise<void> {
-  const url = webAddress(asked)
-
-  if (url === null) {
-    $.ui.toast('The reader opens http and https addresses only')
-
-    return
-  }
-
-  const opening = openPane($)
-  const loadingPage: PaneView = { reader: { url, phase: 'loading' }, trail }
-
-  await update($, view, () => loadingPage)
-  await opening
-
-  const page = await fetchPage($, url)
-
-  // A newer press owns the pane by now: this answer is for a page no longer shown.
-  await update($, view, shown =>
-    shown.reader?.url === url && shown.reader.phase === 'loading' ? { ...shown, reader: page } : shown,
-  )
-
-  if (page.phase !== 'ready') {
-    return
-  }
-
-  const known = (await read($, links)).find(link => link.url === url)
-
-  if (known !== undefined && known.title !== page.title) {
-    await update($, links, list => list.map(link => (link.url === url ? { ...link, title: page.title } : link)))
-    await save($)
   }
 }
 
@@ -553,14 +446,13 @@ function listView(
       <Box flexDirection="row">
         <Text color={link.url === asked ? 'error' : barOf(link, since)}>▎</Text>
         {isLinked ? (
-          <Link href={link.url} label={` ${link.title === undefined ? displayOf(link.url, width) : clip(link.title, width)} `} />
+          <Link href={link.url} label={` ${displayOf(link.url, width)} `} />
         ) : (
           // Without hyperlinks the whole address is written once, as plain
           // text: that is what such a terminal can open on a click.
-          <Text>{` ${link.title === undefined ? link.url : clip(link.title, width)}`}</Text>
+          <Text>{` ${link.url}`}</Text>
         )}
       </Box>
-      {link.title !== undefined && <Text dimColor>{`  ${isLinked ? displayOf(link.url, width) : link.url}`}</Text>}
       <Box flexDirection="row" paddingLeft={1}>
         <Button
           key={`open:${link.url}`}
@@ -569,7 +461,6 @@ function listView(
           label=" open "
           onPress={press => quietly($, 'open the browser', () => openInBrowser($, link.url, press.surface))}
         />
-        <Button key={`read:${link.url}`} plain dimColor label=" read " onPress={run('read the page', () => showPage($, link.url, []))} />
         <Button
           key={`pin:${link.url}`}
           plain
@@ -652,77 +543,6 @@ function listView(
   )
 }
 
-function pageView(
-  $: Engine,
-  kit: Kit,
-  all: readonly Link[],
-  page: ReaderPage,
-  trail: readonly string[],
-  columns: number,
-  isLinked: boolean,
-) {
-  const { Box, Button, Link, Markdown, Text } = kit
-  const run = (what: string, work: () => Promise<unknown>) => () => quietly($, what, work)
-  const known = all.find(link => link.url === page.url)
-  const isPinned = known?.status === 'pinned'
-  const host = new URL(page.url).host
-  const title = page.phase === 'ready' ? page.title : (known?.title ?? host)
-  const back = trail.at(-1)
-
-  return (
-    <Box flexDirection="column">
-      <Box flexDirection="row">
-        <Button
-          key="back"
-          plain
-          label={back === undefined ? ' ‹ all links ' : ' ‹ back '}
-          onPress={run('go back', () => (back === undefined ? showList($) : showPage($, back, trail.slice(0, -1))))}
-        />
-        <Button
-          key="browser"
-          plain
-          label=" ↗ browser "
-          onPress={press => quietly($, 'open the browser', () => openInBrowser($, page.url, press.surface))}
-        />
-        <Button
-          key="keep"
-          plain
-          label={isPinned ? ' ★ pinned ' : ' ☆ pin '}
-          onPress={run('pin', () => setStatus($, page.url, isPinned ? 'floating' : 'pinned'))}
-        />
-        <Button
-          key="copy"
-          plain
-          label=" copy link "
-          onPress={press => quietly($, 'copy', () => copyLink($, page.url, press.surface))}
-        />
-      </Box>
-      <Text bold wrap="truncate-end">
-        {` ${title}`}
-      </Text>
-      {isLinked ? (
-        <Link href={page.url} label={` ${displayOf(page.url, columns - 2)} `} />
-      ) : (
-        <Text dimColor>{` ${page.url}`}</Text>
-      )}
-      <Text dimColor wrap="truncate-end">
-        {'─'.repeat(columns)}
-      </Text>
-      {page.phase === 'loading' && <Text dimColor>{`Fetching ${host}…`}</Text>}
-      {page.phase === 'failed' && <Text color="error">{page.reason}</Text>}
-      {page.phase === 'failed' && <Text dimColor>The reader itself is working; ↗ browser above tries the same address there.</Text>}
-      {page.phase === 'ready' && (
-        <Markdown
-          key="page"
-          text={page.markdown === '' ? '*This page came back empty.*' : page.markdown}
-          // A link inside the page is read in the pane too; the trail is the way back.
-          onLinkPress={link => quietly($, 'follow the link', () => showPage($, link.href, [...trail, page.url].slice(-30)))}
-        />
-      )}
-    </Box>
-  )
-}
-
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -779,7 +599,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'links' }, async $ => {
     await quietly($, 'load the links', () => ensure($))
-    await showList($)
+    await openPane($)
 
     return {}
   })
@@ -832,7 +652,6 @@ export const register: Register = on => {
           ) : (
             <Link href={link.url} label={` ${label} `} />
           )}
-          <Button key={`read:${id}`} plain dimColor label=" read " onPress={run('read the page', () => showPage($, link.url, []))} />
           {!isPinned && (
             <Button
               key={`drop:${id}`}
@@ -858,7 +677,7 @@ export const register: Register = on => {
                 plain
                 dimColor
                 label={hidden > 0 ? ` +${hidden} more ` : ' ≡ '}
-                onPress={run('open the list', () => showList($))}
+                onPress={run('open the list', () => openPane($))}
               />
             )}
           </Box>
@@ -869,7 +688,6 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const all = (await isCurrent($)) ? await read($, links) : []
-    const { reader, trail } = await read($, view)
     const since = await read($, freshSince)
     const kit = $.ui.resolve(e)
     const columns = Math.max(24, e.props.bodyColumns)
@@ -878,8 +696,6 @@ export const register: Register = on => {
 
     const asked = await read($, armed)
 
-    return reader === null
-      ? listView($, kit, all, columns, since, isLinked, asked)
-      : pageView($, kit, all, reader, trail, columns, isLinked)
+    return listView($, kit, all, columns, since, isLinked, asked)
   })
 }
