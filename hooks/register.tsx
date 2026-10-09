@@ -30,6 +30,8 @@ const DISARM_MS = 4000
 // Below this many floating links, one `×` at a time is quick; from it on the
 // band also offers to dismiss them all at once. Pinned links are never touched.
 const BULK_MIN = 5
+// The list offers it sooner: the person who opened it is tidying already.
+const LIST_BULK_MIN = 2
 // The `armed` value that puts the question over every floating link rather
 // than one of them. No normalized address can look like it.
 const ALL = '*'
@@ -613,9 +615,24 @@ function listView(
       )}
       {pinned.map(row)}
       {floating.length > 0 && (
-        <Text bold color="suggestion">
-          ☆ FLOATING
-        </Text>
+        <Box key="floating" flexDirection="row">
+          <Text bold color="suggestion">
+            ☆ FLOATING
+          </Text>
+          {floating.length >= LIST_BULK_MIN && asked !== ALL && (
+            <Button
+              key="bulk"
+              plain
+              dimColor
+              label=" dismiss all "
+              hover={{ color: 'error' }}
+              onPress={press => quietly($, 'ask about every link', () => askAll($, 'bulk', press.requestId))}
+            />
+          )}
+          {floating.length >= LIST_BULK_MIN && asked === ALL && (
+            <Button key="bulk" plain label={` dismiss ${floating.length}? `} hover={{ color: 'error' }} onPress={run('dismiss every link', () => dismissAll($))} />
+          )}
+        </Box>
       )}
       {floating.map(row)}
       {dismissed.length > 0 && (

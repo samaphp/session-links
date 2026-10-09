@@ -477,6 +477,29 @@ describe('dismissing all at once', () => {
     await ui.unmount()
   })
 
+  test('the list offers it from two floating links, with the same two presses', async ($, on) => {
+    const w = world(on)
+    await start($)
+    await say($, 'prompt', DOCS)
+
+    const one = await pane($)
+    expect(await one.find({ key: 'bulk' })).toBeUndefined()
+    await one.unmount()
+
+    await say($, 'prompt', `${PULL} ${LOCAL}`)
+    const ui = await pane($)
+    await ui.press({ key: `pin:${LOCAL}` })
+    expect((await ui.find({ key: 'bulk' }))?.props.label).toBe(' dismiss all ')
+    await ui.press({ key: 'bulk' })
+    expect((await ui.find({ key: 'bulk' }))?.props.label).toBe(' dismiss 2? ')
+    await ui.press({ key: 'bulk' })
+
+    expect(saved(w).map(link => [link.url, link.status])).toEqual([[DOCS, 'dismissed'], [PULL, 'dismissed'], [LOCAL, 'pinned']])
+    expect(w.toasts.at(-1)).toBe('Dismissed 2 links, kept 1 pinned · /links brings them back')
+    expect(await ui.find({ key: 'bulk' })).toBeUndefined()
+    await ui.unmount()
+  })
+
   test('a press after the question lapsed dismisses nothing', async ($, on) => {
     const w = world(on)
     await start($)
