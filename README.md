@@ -1,8 +1,6 @@
 # session-links
 
-Every link your session mentions, in one row above the prompt.
-
-Paste a docs page, let Claude point you at a pull request, start a dev server: each address becomes a chip above the prompt the moment it is mentioned. Pin the ones you keep coming back to, dismiss the noise, open any of them in your browser. What you pin and dismiss is saved with the session, so it is exactly as you left it when you resume.
+Every link your session mentions, in one row above the prompt. Pin the ones you keep coming back to, dismiss the noise, open any of them in your browser, give one a name — all saved with the session. Nothing is ever fetched, and the model never sees any of it: zero tokens.
 
 In the terminal:
 
@@ -12,73 +10,32 @@ In the Claude desktop app:
 
 ![The same band above the prompt box of the Claude desktop app](docs/band-desktop.png)
 
-```
-▎ ★  docs.claude.com   ▎ ☆  github.com/pull/12  ×   ▎ ☆  localhost:5173  ×    ≡
-```
-
-## Why
-
-A long session scatters addresses through the transcript: the page you were reading, the issue Claude found, the server it started. Scrolling back to find them again is the tax this mod removes. The band stays out of your way (nothing is drawn while there is no link), the links that matter stay pinned, and the model never sees any of it: the mod costs zero tokens. It never fetches anything either: no address is requested until you open it, and then it is your browser that does.
-
 ## Install
-
-Needs Claude Code 2.1.291 or later.
-
-To try it, run Claude Code with the folder:
-
-```sh
-claude --plugin-dir path/to/session-links
-```
-
-To have it in every session:
 
 ```sh
 claude plugin marketplace add samaphp/session-links
 claude plugin install session-links@session-links
 ```
 
-Start `claude`, mention a link, and the band appears. To remove it: `claude plugin uninstall session-links`.
+Needs Claude Code 2.1.291 or later. To try it without installing: `claude --plugin-dir path/to/session-links`. To remove it: `claude plugin uninstall session-links`.
 
-## The band
+## Update
 
-| Control | What it does |
-|---|---|
-| `☆` / `★` | Pin or unpin. A pinned link takes the first seat and stays for the whole session; it shows no `×`, so losing it takes an unpin first. |
-| the address | Opens the link in your browser. |
-| `×` | Dismisses the link. The first press asks (`dismiss?`), the second confirms; left alone, it lapses. A dismissed link stays hidden even when mentioned again, and can be restored from `/links`. |
-| `dismiss all` | Shown from five floating links. The first press asks (`dismiss 12?`): press it again to dismiss every floating link, or press `dismiss 12 & open the list` beside it to do the same and open `/links`, where any of them can be restored. Pinned links stay. |
-| `≡` / `+N more` | Opens the full list. |
+```sh
+claude plugin update session-links
+```
 
-The coloured bar on each chip says what it is: orange for pinned, blue for a link that arrived since your last prompt, grey for older ones. Pinned links come first, then the most repeated. The band grows to three rows before it counts the rest, and two links on one site get a short hint of their path (`github.com/pull/12`, `github.com/issues/7`).
+## Use
 
-Keyboard: `ctrl+x` then `Tab` moves into the band; `Tab`, `Shift+Tab` and the arrows walk the controls; `Enter` presses; `Esc` returns to the prompt.
+- Mention a link — yours or Claude's — and it becomes a chip above the prompt. The band stays hidden until there is one.
+- `☆` pins a link (first seat, whole session) · the address opens your browser · `×` dismisses it (press twice) · `≡` opens `/links`.
+- From five floating links, `dismiss all` clears them in two presses; the second answer beside it also opens `/links`, so you can restore the few you need. Pinned links are never touched.
+- `/links` lists every link in three groups — pinned, floating, dismissed — with `open`, `pin`, `dismiss`, `copy`, `rename` and `restore`. The text box at the top adds an address you paste, pinned. `dismiss all` is there too, from two links.
+- `rename` gives a link a name that leads on its chip and in the list; the address stays beneath it. Only in `/links`, never on the band.
+- Keyboard: `ctrl+x` then `Tab` enters the band; `Tab` and the arrows walk, `Enter` presses, `Esc` returns. Mouse: the fullscreen layout (`/tui fullscreen`) makes every control clickable; in the default layout set `FORCE_HYPERLINK=1` and the addresses become hyperlinks your terminal opens on a click.
+- Pins, dismissals and names survive exit and `--resume`.
 
-## `/links`
-
-The pane lists every link of the session in three groups, pinned, floating and dismissed, each with `open`, `pin`, `dismiss`, `copy` and `rename`, and `restore` for the dismissed ones. A text box at the top takes an address you type or paste; press `Enter` and it is added pinned (the `https://` can be left off). From two floating links the FLOATING heading carries `dismiss all`, the same two-press question as the band's.
-
-`rename` opens a text box under the link: `Enter` saves the name, which from then on leads on the chip and in the list, with the address beneath it; an empty `Enter` clears the name. Renaming happens here only, never on the band.
-
-## What is collected
-
-- Addresses in what you type, in slash-command rows, and in Claude's replies.
-- Left out: tool output (one search result or lockfile would bury the links the conversation is about), and addresses a writer shortened with `…`.
-- Query strings are never drawn on the band: that is where tokens and signatures ride.
-
-## Terminal notes
-
-- In Claude Code's default layout the mouse does not reach the band; the keyboard does. The fullscreen layout (`/tui fullscreen`) makes every control clickable.
-- On a terminal Claude Code does not recognise as hyperlink-capable, set `FORCE_HYPERLINK=1` (for example in the `env` block of your Claude Code settings) and the addresses become real hyperlinks your terminal can open on a click.
-- Everything is laid out for terminals as narrow as 87 columns.
-
-## How it works
-
-A Claude Code mod is a plugin whose hooks are TypeScript functions running inside Claude Code.
-
-- `hooks/register.tsx` watches every row the conversation keeps, draws the band and the pane, and registers `/links`. Decisions are written through to the plugin's store on every change, keyed by session id, so a resume restores them exactly.
-- `hooks/links.ts` finds addresses in text, keeps the list within its cap, orders it, and writes the labels.
-- `types/index.d.ts` is the state contract the engine checks the hooks against.
-- `tests/` presses the real band and pane through Claude Code's own test kit.
+The controls in full, the colours, what is collected and what is left out, terminal notes and how it works: [docs/reference.md](docs/reference.md).
 
 ## Develop
 
