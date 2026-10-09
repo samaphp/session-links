@@ -27,6 +27,12 @@ const PINNED_CELLS = 7
 const ARMED_LABEL = ' dismiss? '
 const DISMISS_LABEL = ' × '
 const DISARM_MS = 4000
+// Below this many floating links, one `×` at a time is quick; from it on the
+// band also offers to dismiss them all at once. Pinned links are never touched.
+const BULK_MIN = 5
+// The `armed` value that puts the question over every floating link rather
+// than one of them. No normalized address can look like it.
+const ALL = '*'
 // Room kept at a row's end for the control that closes the band, air included:
 // ` +12 more ` on the last row the band may take, ` ≡ ` on an earlier one.
 const BAND_TAIL = 11
@@ -62,7 +68,7 @@ const armed = atom({ plugin: 'session-links', key: 'armed' } as const, '')
 type Engine = EngineInterface
 // `id` is the link's address: it names the link's controls wherever the chip
 // sits, so a key stays with its link when the row reorders or the cap trims.
-type Chip = { link: Link; id: string; label: string }
+type Chip = { link: Link; id: string; label: string; width: number }
 type Kit = Pick<Elements[RenderSurface], 'Box' | 'Button' | 'Link' | 'Text'> & {
   // The mobile app draws no text field yet: there the list goes without its add box.
   Input?: Elements['terminal']['Input']
@@ -288,6 +294,13 @@ async function addByHand($: Engine, text: string): Promise<void> {
   $.ui.toast(urls.length === 1 ? `Pinned ${labelOf(urls[0] ?? '', 44)}` : `Pinned ${urls.length} links`)
 }
 
+/** Puts the question on `what` (one address, or ALL). One question stands at a time: asking moves it. */
+async function ask($: Engine, what: string): Promise<void> {
+  await update($, armed, () => what)
+  // A question nobody answers must not wait there to catch a stray press later.
+  $.clock.after(DISARM_MS, () => void quietly($, 'withdraw the question', () => update($, armed, now => (now === what ? '' : now))))
+}
+
 /** The first press on a link's dismiss asks; the second, while the question stands, answers yes. */
 async function pressDismiss($: Engine, url: string): Promise<void> {
   if ((await read($, armed)) === url) {
@@ -297,9 +310,46 @@ async function pressDismiss($: Engine, url: string): Promise<void> {
     return
   }
 
-  await update($, armed, () => url)
-  // A question nobody answers must not wait there to catch a stray press later.
-  $.clock.after(DISARM_MS, () => void quietly($, 'withdraw the question', () => update($, armed, now => (now === url ? '' : now))))
+  await ask($, url)
+}
+
+/**
+ * The question over every floating link. Arming re-seats the band (the
+ * question is wider than the offer), so the focus ring is sent back to it:
+ * two presses on the same spot dismiss them all, as on a chip.
+ */
+async function askAll($: Engine, key: string, requestId: string): Promise<void> {
+  await ask($, ALL)
+
+  const moved = await $.ui.focus({ requestId, key })
+
+  if (moved.deny !== undefined) {
+    $.ui.log(`the highlight stayed where it was: ${moved.deny}`, { to: 'debug' })
+  }
+}
+
+/**
+ * Every floating link at once, while the question still stands: a press that
+ * lands after it lapsed, on a frame not yet redrawn, must not clear the band.
+ * Pinned links are the person's own and stay; the toast counts both.
+ */
+async function dismissAll($: Engine): Promise<void> {
+  if ((await read($, armed)) !== ALL) {
+    return
+  }
+
+  let gone = 0
+  let kept = 0
+
+  await update($, armed, () => '')
+  await update($, links, list => {
+    gone = list.filter(link => link.status === 'floating').length
+    kept = list.filter(link => link.status === 'pinned').length
+
+    return list.map(link => (link.status === 'floating' ? { ...link, status: 'dismissed' } : link))
+  })
+  await save($)
+  $.ui.toast(`Dismissed ${gone === 1 ? 'one link' : `${gone} links`}${kept === 0 ? '' : `, kept ${kept} pinned`} · /links brings them back`)
 }
 
 async function copyLink($: Engine, url: string, surface: RenderSurface): Promise<void> {
@@ -380,15 +430,31 @@ const barOf = (link: Link, since: number): string =>
   link.status === 'pinned' ? 'claude' : link.lastAt >= since ? 'suggestion' : 'subtle'
 
 /**
+ * What the band offers over every floating link at once, by their count and
+ * whether the question stands: nothing below BULK_MIN, else the offer, else
+ * the question (press it to answer yes) beside the answer that also opens the
+ * list, for the person who clears the band and then restores a few.
+ */
+function bulkLabels(floating: number, isAsked: boolean): string[] {
+  if (floating < BULK_MIN) {
+    return []
+  }
+
+  return isAsked ? [` dismiss ${floating}? `, ` dismiss ${floating} & open the list `] : [' dismiss all ']
+}
+
+/**
  * Chips fill a row, then the next, up to `maxRows`; what the last row cannot
  * seat whole is counted, never squeezed. Every row keeps room for the control
- * that closes the band, since any row may turn out to be its last.
+ * that closes the band, since any row may turn out to be its last; the last
+ * one also keeps `tail` cells for the bulk control drawn beside it.
  */
 function seat(
   all: readonly Link[],
   columns: number,
   maxRows: number,
   asked: string,
+  tail: number,
 ): { rows: Chip[][]; hidden: number } {
   const ordered = bandOrder(all)
   const labels = chipLabels(ordered)
@@ -403,7 +469,7 @@ function seat(
       (link.status === 'pinned' ? PINNED_CELLS : FLOATING_CELLS) +
       (link.url === asked ? ARMED_LABEL.length - DISMISS_LABEL.length : 0)
     const isLastRow = rows.length >= maxRows
-    const isFull = used > 0 && used + width > columns - (isLastRow ? BAND_TAIL : ROW_TAIL)
+    const isFull = used > 0 && used + width > columns - (isLastRow ? BAND_TAIL + tail : ROW_TAIL)
 
     if (isFull && isLastRow) {
       break
@@ -414,9 +480,41 @@ function seat(
       used = 0
     }
 
-    rows.at(-1)?.push({ link, id: link.url, label })
+    rows.at(-1)?.push({ link, id: link.url, label, width })
     used += width
     seated += 1
+  }
+
+  // The row that turns out last carries the tail too, and it kept room only
+  // for a row's end if the links ran out before the cap. Its closing chip
+  // moves down to a row of its own while there is one; at the cap it gives
+  // way, since a clipped control cannot be pressed and a hidden chip is counted.
+  for (;;) {
+    const last = rows.at(-1) ?? []
+    const lastUsed = last.reduce((cells, chip) => cells + chip.width, 0)
+    // Below the cap nothing is hidden, so the row ends in ` ≡ `, not a count.
+    const end = rows.length >= maxRows ? BAND_TAIL : ROW_TAIL
+
+    if (lastUsed <= columns - (end + tail)) {
+      break
+    }
+
+    const moved = last.pop()
+
+    if (moved === undefined) {
+      break
+    }
+
+    if (rows.length >= maxRows) {
+      seated -= 1
+    } else if (last.length > 0) {
+      rows.push([moved])
+    } else {
+      // A lone chip too wide to share its row with the tail keeps the row; the tail takes the next.
+      last.push(moved)
+      rows.push([])
+      break
+    }
   }
 
   return { rows, hidden: ordered.length - seated }
@@ -617,7 +715,10 @@ export const register: Register = on => {
     const since = await read($, freshSince)
     const { Box, Button, Link, Text } = $.ui.resolve(e)
     const asked = await read($, armed)
-    const { rows, hidden } = seat(all, e.props.bodyColumns, Math.max(1, Math.min(MAX_ROWS, e.props.maxRows)), asked)
+    const floating = all.filter(link => link.status === 'floating').length
+    const bulk = bulkLabels(floating, asked === ALL)
+    const tail = bulk.reduce((cells, label) => cells + label.length, 0)
+    const { rows, hidden } = seat(all, e.props.bodyColumns, Math.max(1, Math.min(MAX_ROWS, e.props.maxRows)), asked, tail)
     // A click reaches a Button only where the surface reports clicks: the
     // fullscreen terminal. On the main screen only the terminal's own
     // hyperlink answers a click, so the label is a Link there when one will
@@ -629,10 +730,12 @@ export const register: Register = on => {
     const chip = ({ link, id, label }: Chip) => {
       const isPinned = link.status === 'pinned'
       const isAsked = link.url === asked
+      // The bar names what the standing question would take: this link, or every floating one.
+      const isMarked = isAsked || (asked === ALL && !isPinned)
 
       return (
         <Box key={`chip:${id}`} flexDirection="row" flexShrink={0} marginRight={1}>
-          <Text color={isAsked ? 'error' : barOf(link, since)}>▎</Text>
+          <Text color={isMarked ? 'error' : barOf(link, since)}>▎</Text>
           <Button
             key={`pin:${id}`}
             plain
@@ -671,6 +774,31 @@ export const register: Register = on => {
         {rows.map((row, at) => (
           <Box key={`row:${at}`} flexDirection="row">
             {row.map(chip)}
+            {at === rows.length - 1 && bulk.length === 1 && (
+              <Button
+                key="bulk"
+                plain
+                dimColor
+                label={bulk[0]}
+                hover={{ color: 'error' }}
+                onPress={press => quietly($, 'ask about every link', () => askAll($, 'bulk', press.requestId))}
+              />
+            )}
+            {at === rows.length - 1 && bulk.length === 2 && (
+              <Button key="bulk" plain label={bulk[0]} hover={{ color: 'error' }} onPress={run('dismiss every link', () => dismissAll($))} />
+            )}
+            {at === rows.length - 1 && bulk.length === 2 && (
+              <Button
+                key="bulk:list"
+                plain
+                label={bulk[1]}
+                hover={{ color: 'error' }}
+                onPress={run('dismiss every link and open the list', async () => {
+                  await dismissAll($)
+                  await openPane($)
+                })}
+              />
+            )}
             {at === rows.length - 1 && (
               <Button
                 key="all"

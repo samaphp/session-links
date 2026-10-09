@@ -38,6 +38,7 @@ Start `claude`, mention a link, and the band appears. To remove it: `claude plug
 | `☆` / `★` | Pin or unpin. A pinned link takes the first seat and stays for the whole session; it shows no `×`, so losing it takes an unpin first. |
 | the address | Opens the link in your browser. |
 | `×` | Dismisses the link. The first press asks (`dismiss?`), the second confirms; left alone, it lapses. A dismissed link stays hidden even when mentioned again, and can be restored from `/links`. |
+| `dismiss all` | Shown from five floating links. The first press asks (`dismiss 12?`): press it again to dismiss every floating link, or press `dismiss 12 & open the list` beside it to do the same and open `/links`, where any of them can be restored. Pinned links stay. |
 | `≡` / `+N more` | Opens the full list. |
 
 The coloured bar on each chip says what it is: orange for pinned, blue for a link that arrived since your last prompt, grey for older ones. Pinned links come first, then the most repeated. The band grows to three rows before it counts the rest, and two links on one site get a short hint of their path (`github.com/pull/12`, `github.com/issues/7`).

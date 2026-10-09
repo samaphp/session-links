@@ -17,6 +17,8 @@ type World = {
   toasts: string[]
   logged: string[]
   copied: string[]
+  /** How many times the mod asked for its pane. */
+  opened: number
   /** Every key the mod read from the store, in order. */
   reads: string[]
   /** What each opener does, by its program: an exit code, or 'missing' when the machine has no such program. */
@@ -36,6 +38,7 @@ function world(on: On, store?: Record<string, unknown>, env: Record<string, stri
     toasts: [],
     logged: [],
     copied: [],
+    opened: 0,
     reads: [],
     openers: {},
     refusals: 0,
@@ -72,7 +75,11 @@ function world(on: On, store?: Record<string, unknown>, env: Record<string, stri
   on('session.messages', () => ({ value: w.messages }))
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
-  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.open', () => {
+    w.opened += 1
+
+    return { value: { isPlaced: true } }
+  })
   on('ui.copy', ($, e) => {
     w.copied.push(e.text)
 
@@ -195,17 +202,31 @@ describe('collecting', () => {
   test('a full row wraps to the next, up to three rows; what the third cannot seat is counted', async ($, on) => {
     world(on)
     await start($)
-    await say($, 'prompt', `${DOCS} ${PULL} ${LOCAL} https://d.example.com/4 https://e.example.com/5`)
+    // Four links: below the offer to dismiss all, which takes room of its own.
+    await say($, 'prompt', `${DOCS} ${PULL} ${LOCAL} https://d.example.com/4`)
 
-    // 30 cells seat one chip a row.
-    const ui = await band($, 30)
+    // 36 cells seat one chip a row, and the count beside the last one.
+    const ui = await band($, 36)
     const drawn = (await ui.drawn()) as unknown as { children: { children: { props: { label?: string } }[] }[] }
 
     expect(drawn.children).toHaveLength(3)
     expect((await ui.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('open:'))).toHaveLength(3)
-    expect((await ui.find({ key: 'all' }))?.props.label).toBe(' +2 more ')
+    expect((await ui.find({ key: 'all' }))?.props.label).toBe(' +1 more ')
     // The count closes the last row, where the person's eye ends.
-    expect(drawn.children[2]?.children.at(-1)?.props.label).toBe(' +2 more ')
+    expect(drawn.children[2]?.children.at(-1)?.props.label).toBe(' +1 more ')
+    await ui.unmount()
+  })
+
+  test('two chips that fill a row short of the list control stay on it', async ($, on) => {
+    world(on)
+    await start($)
+    // 20 + 25 cells of chips, 3 for ` ≡ `: 48 of 52. A count (` +N more `) is never drawn below the cap.
+    await say($, 'prompt', `${PULL} https://docs.github.com/en/get-started`)
+
+    const ui = await band($, 52)
+    const drawn = (await ui.drawn()) as unknown as { children: unknown[] }
+
+    expect(drawn.children).toHaveLength(1)
     await ui.unmount()
   })
 
@@ -396,6 +417,135 @@ describe('deciding', () => {
     expect(await ui.find({ type: 'Text', text: DOCS })).toBeDefined()
     await ui.press({ key: `restore:${PULL}` })
     expect(await ui.find({ type: 'Text', text: /2 floating · 0 dismissed/ })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
+describe('dismissing all at once', () => {
+  const FIVE = ['https://a.example.com/1', 'https://b.example.com/2', 'https://c.example.com/3', 'https://d.example.com/4', 'https://e.example.com/5']
+
+  test('the offer appears from five floating links; a pinned link does not count', async ($, on) => {
+    world(on)
+    await start($)
+    await say($, 'prompt', FIVE.slice(0, 4).join(' '))
+
+    const four = await band($, 200)
+    expect(await four.find({ key: 'bulk' })).toBeUndefined()
+    await four.press({ key: `pin:${FIVE[0]}` })
+    await four.unmount()
+
+    await say($, 'prompt', FIVE[4] ?? '')
+    // Four floating and one pinned: still not five to clear.
+    const still = await band($, 200)
+    expect(await still.find({ key: 'bulk' })).toBeUndefined()
+    await still.unmount()
+
+    await say($, 'prompt', 'https://f.example.com/6')
+    const ui = await band($, 200)
+    expect((await ui.find({ key: 'bulk' }))?.props.label).toBe(' dismiss all ')
+    await ui.unmount()
+  })
+
+  test('the row that turns out last makes room for the offer: its closing chip moves down', async ($, on) => {
+    world(on)
+    await start($)
+    // Six chips of 23 cells: three fill a row of 80 with a row's end kept, and the links run out at two rows.
+    await say($, 'prompt', ['a', 'b', 'c', 'd', 'e', 'f'].map(n => `https://${n}.example.com/`).join(' '))
+
+    const ui = await band($, 80)
+    const drawn = (await ui.drawn()) as unknown as { children: { children: { type?: string; props?: { label?: string } }[] }[] }
+
+    expect(drawn.children).toHaveLength(3)
+    // One chip came down to share the new last row with the offer and the list control.
+    expect(drawn.children[2]?.children.map(child => child.props?.label ?? child.type)).toEqual(['Box', ' dismiss all ', ' ≡ '])
+    expect(await ui.find({ key: 'all' })).toMatchObject({ props: { label: ' ≡ ' } })
+    await ui.unmount()
+  })
+
+  test('at the cap the offer and the count keep the last row; the chips that do not fit beside them are counted', async ($, on) => {
+    world(on)
+    await start($)
+    await say($, 'prompt', `${DOCS} ${PULL} ${LOCAL} https://d.example.com/4 https://e.example.com/5`)
+
+    // 30 cells seat one chip a row; the third row has no room for a chip beside ` dismiss all  +3 more `.
+    const ui = await band($, 30)
+    const drawn = (await ui.drawn()) as unknown as { children: { children: { type?: string; props?: { label?: string } }[] }[] }
+
+    expect(drawn.children).toHaveLength(3)
+    expect(drawn.children[2]?.children.map(child => child.props?.label ?? child.type)).toEqual([' dismiss all ', ' +3 more '])
+    expect((await ui.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('open:'))).toHaveLength(2)
+    await ui.unmount()
+  })
+
+  test('a press after the question lapsed dismisses nothing', async ($, on) => {
+    const w = world(on)
+    await start($)
+    await say($, 'prompt', FIVE.join(' '))
+
+    const ui = await band($, 200)
+    await ui.press({ key: 'bulk' })
+    // The frame still shows the question when the lapse clears it; the press that follows lands on the old frame.
+    const stale = (await ui.find({ key: 'bulk' }))?.props as { onPress?: (press: unknown) => Promise<unknown> }
+    await w.clock.advance(4_000)
+    await stale.onPress?.({ requestId: 'stale', surface: 'terminal' })
+
+    expect(saved(w).every(link => link.status === 'floating')).toBe(true)
+    await ui.unmount()
+  })
+
+  test('the first press asks over every floating link; the question dismisses them all and keeps the pinned', async ($, on) => {
+    const w = world(on)
+    await start($)
+    await say($, 'prompt', `${PULL} ${FIVE.join(' ')}`)
+
+    const ui = await band($, 200)
+    await ui.press({ key: `pin:${PULL}` })
+    await ui.press({ key: 'bulk' })
+
+    expect((await ui.find({ key: 'bulk' }))?.props.label).toBe(' dismiss 5? ')
+    expect((await ui.find({ key: 'bulk:list' }))?.props.label).toBe(' dismiss 5 & open the list ')
+    // The chips' own crosses stay crosses: the question stands at the band's end, not on each link.
+    expect((await ui.find({ key: `drop:${FIVE[0]}` }))?.props.label).toBe(' × ')
+
+    await ui.press({ key: 'bulk' })
+
+    expect(saved(w).map(link => link.status)).toEqual(['pinned', 'dismissed', 'dismissed', 'dismissed', 'dismissed', 'dismissed'])
+    expect((await ui.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('open:'))).toHaveLength(1)
+    expect(w.toasts.at(-1)).toBe('Dismissed 5 links, kept 1 pinned · /links brings them back')
+    expect(w.opened).toBe(0)
+    await ui.unmount()
+  })
+
+  test('the second answer dismisses them all and opens the list', async ($, on) => {
+    const w = world(on)
+    await start($)
+    await say($, 'prompt', FIVE.join(' '))
+
+    const ui = await band($, 200)
+    await ui.press({ key: 'bulk' })
+    await ui.press({ key: 'bulk:list' })
+
+    expect(saved(w).every(link => link.status === 'dismissed')).toBe(true)
+    expect(w.toasts.at(-1)).toBe('Dismissed 5 links · /links brings them back')
+    expect(w.opened).toBe(1)
+    await ui.unmount()
+  })
+
+  test('the question over all lapses, and a single link’s question takes its place', async ($, on) => {
+    const w = world(on)
+    await start($)
+    await say($, 'prompt', FIVE.join(' '))
+
+    const ui = await band($, 200)
+    await ui.press({ key: 'bulk' })
+    await w.clock.advance(4_000)
+    expect((await ui.find({ key: 'bulk' }))?.props.label).toBe(' dismiss all ')
+
+    await ui.press({ key: 'bulk' })
+    await ui.press({ key: `drop:${FIVE[1]}` })
+    expect((await ui.find({ key: `drop:${FIVE[1]}` }))?.props.label).toBe(' dismiss? ')
+    expect((await ui.find({ key: 'bulk' }))?.props.label).toBe(' dismiss all ')
+    expect(saved(w).every(link => link.status === 'floating')).toBe(true)
     await ui.unmount()
   })
 })

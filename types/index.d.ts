@@ -32,7 +32,7 @@ declare module 'claude-code' {
       sessionId: string
       links: Link[]
       freshSince: number
-      /** The url whose dismiss was pressed once and waits for the second press; '' when none does. */
+      /** The url whose dismiss was pressed once and waits for the second press, `*` when the question stands over every floating link; '' when none does. */
       armed: string
     }
   }
