@@ -21,6 +21,8 @@ export type Link = {
    */
   firstAt: number
   lastAt: number
+  /** The person's own name for the link, given in the list; it leads on the chip and in the list. */
+  name?: string
 }
 
 /** What `$.store` keeps under `session:<id>`, so a resume restores the band exactly. */
@@ -32,6 +34,8 @@ declare module 'claude-code' {
       sessionId: string
       links: Link[]
       freshSince: number
+      /** The url whose name is being edited in the list; '' when none is. */
+      renaming: string
       /** The url whose dismiss was pressed once and waits for the second press, `*` when the question stands over every floating link; '' when none does. */
       armed: string
     }

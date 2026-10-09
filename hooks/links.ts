@@ -1,9 +1,9 @@
 import type { Link, LinkSource } from '../types'
 
 /**
- * Floating links per session. Past it the oldest floating link leaves. A pinned
- * or dismissed one never does: those are the person's decisions, and the
- * list promises that a dismissed link stays dismissed when mentioned again.
+ * Unnamed floating links per session. Past it the oldest of them leaves. A
+ * pinned, dismissed or named link never does: those are the person's decisions,
+ * and the list promises that a dismissed link stays dismissed when mentioned again.
  */
 export const MAX_LINKS = 300
 
@@ -99,7 +99,7 @@ export function extractUrls(text: string): string[] {
 }
 
 function trim(list: Link[]): Link[] {
-  const floating = list.filter(link => link.status === 'floating').sort((a, b) => a.lastAt - b.lastAt)
+  const floating = list.filter(link => link.status === 'floating' && link.name === undefined).sort((a, b) => a.lastAt - b.lastAt)
   const gone = new Set(floating.slice(0, Math.max(0, floating.length - MAX_LINKS)))
 
   return gone.size === 0 ? list : list.filter(link => !gone.has(link))
@@ -171,19 +171,24 @@ function hintsFor(paths: readonly (readonly string[])[]): string[] {
 }
 
 /**
- * What each chip writes, by link: the site alone, so that one row seats many
- * links, and beside it a short hint of the path only for links that share
- * their site with another one on the band.
+ * What each chip writes, by link: the name the person gave it in the list,
+ * else the site alone, so that one row seats many links, and beside it a
+ * short hint of the path only for links that share their site with another
+ * unnamed one on the band.
  */
 export function chipLabels(links: readonly Link[]): Map<string, string> {
   const bySite = new Map<string, Link[]>()
+  const labels = new Map<string, string>()
 
   for (const link of links) {
+    if (link.name !== undefined) {
+      labels.set(link.url, clip(link.name, MAX_DOMAIN))
+      continue
+    }
+
     const site = siteOf(link.url)
     bySite.set(site, [...(bySite.get(site) ?? []), link])
   }
-
-  const labels = new Map<string, string>()
 
   for (const [site, group] of bySite) {
     const hints =

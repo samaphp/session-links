@@ -632,7 +632,70 @@ describe('adding by hand', () => {
 
     expect(labels.filter(label => !(label.startsWith(' ') && label.endsWith(' ')))).toEqual([])
     // The pane's close mark is the engine's own, on the frame: the mod draws none beside it.
-    expect(labels).toEqual([' open ', ' pin ', ' dismiss ', ' copy ', ' restore '])
+    expect(labels).toEqual([' open ', ' pin ', ' dismiss ', ' copy ', ' rename ', ' restore '])
+    await ui.unmount()
+  })
+})
+
+describe('naming', () => {
+  test('a link is named from the list; the name leads on the chip, in the list and in the toast, the address stays', async ($, on) => {
+    const w = world(on)
+    await start($)
+    await say($, 'prompt', `${PULL} https://github.com/acme/app/issues/7`)
+
+    const ui = await pane($)
+    expect(await ui.find({ key: 'rename' })).toBeUndefined()
+    await ui.press({ key: `rename:${PULL}` })
+    expect((await ui.find({ key: 'rename' }))?.props.value).toBe('')
+    expect((await ui.find({ key: `rename:${PULL}` }))?.props.label).toBe(' cancel ')
+    await ui.input({ key: 'rename', text: '  auth PR\u0007 ' })
+
+    expect(saved(w).find(link => link.url === PULL)?.name).toBe('auth PR')
+    expect(await ui.find({ key: 'rename' })).toBeUndefined()
+    expect(w.toasts.at(-1)).toBe('Named github.com/acme/app/pull/12 "auth PR"')
+    // The address stays on the row under the name, so the link can still be checked in the list.
+    expect(await ui.find({ type: 'Text', text: 'auth PR' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: PULL })).toBeDefined()
+    await ui.press({ key: `copy:${PULL}` })
+    expect(w.toasts.at(-1)).toBe('Copied auth PR')
+    await ui.press({ key: `open:${PULL}` })
+    expect(w.toasts.at(-1)).toBe('Sent auth PR to your browser')
+    // The field is pre-filled with the name the next time.
+    await ui.press({ key: `rename:${PULL}` })
+    expect((await ui.find({ key: 'rename' }))?.props.value).toBe('auth PR')
+    await ui.unmount()
+
+    // On the band the name takes the chip; the unnamed link on the same site needs no hint any more.
+    const strip = await band($, 200)
+    const labels = (await strip.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('open:')).map(b => b.props.label)
+    expect(labels).toEqual([' auth PR ', ' github.com '])
+    await strip.press({ key: `drop:${PULL}` })
+    await strip.press({ key: `drop:${PULL}` })
+    expect(w.toasts.at(-1)).toBe('Dismissed auth PR · /links brings it back')
+    await strip.unmount()
+  })
+
+  test('an empty name clears it; cancel closes the field; the add box yields the focus while a name is typed', async ($, on) => {
+    const w = world(on)
+    await start($)
+    await say($, 'prompt', PULL)
+
+    const ui = await pane($)
+    expect((await ui.find({ key: 'add' }))?.props.autoFocus).toBe(true)
+    await ui.press({ key: `rename:${PULL}` })
+    expect((await ui.find({ key: 'add' }))?.props.autoFocus).toBeUndefined()
+    await ui.input({ key: 'rename', text: 'auth PR' })
+    await ui.press({ key: `rename:${PULL}` })
+    await ui.input({ key: 'rename', text: '   ' })
+
+    expect(saved(w)[0]?.name).toBeUndefined()
+    expect(w.toasts.at(-1)).toBe('Cleared the name of github.com/acme/app/pull/12')
+
+    await ui.press({ key: `rename:${PULL}` })
+    expect(await ui.find({ key: 'rename' })).toBeDefined()
+    await ui.press({ key: `rename:${PULL}` })
+    expect(await ui.find({ key: 'rename' })).toBeUndefined()
+    expect((await ui.find({ key: `rename:${PULL}` }))?.props.label).toBe(' rename ')
     await ui.unmount()
   })
 })
@@ -774,6 +837,15 @@ describe('limits', () => {
     expect(list[0]?.url).toBe('https://a.example.com/kept')
     expect(list.some(link => link.url === 'https://a.example.com/0')).toBe(false)
     expect(list.at(-1)?.url).toBe(`https://a.example.com/${MAX_LINKS + 3}`)
+  })
+
+  test('a named floating link survives the cap: a name is a decision too', () => {
+    const named: Link[] = mergeMentions([], ['https://a.example.com/named'], 'claude', 1).map(link => ({ ...link, name: 'the one' }))
+    const many = Array.from({ length: MAX_LINKS + 4 }, (_, n) => `https://a.example.com/${n}`)
+    const list = many.reduce((held, url, n) => mergeMentions(held, [url], 'claude', n + 2), named)
+
+    expect(list.find(link => link.url === 'https://a.example.com/named')).toMatchObject({ status: 'floating', name: 'the one' })
+    expect(list.filter(link => link.name === undefined)).toHaveLength(MAX_LINKS)
   })
 
   test('a dismissed link survives the cap, so mentioned again it still stays dismissed', () => {

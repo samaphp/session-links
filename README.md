@@ -47,7 +47,9 @@ Keyboard: `ctrl+x` then `Tab` moves into the band; `Tab`, `Shift+Tab` and the ar
 
 ## `/links`
 
-The pane lists every link of the session in three groups, pinned, floating and dismissed, each with `open`, `pin`, `dismiss` and `copy`, and `restore` for the dismissed ones. A text box at the top takes an address you type or paste; press `Enter` and it is added pinned (the `https://` can be left off). From two floating links the FLOATING heading carries `dismiss all`, the same two-press question as the band's.
+The pane lists every link of the session in three groups, pinned, floating and dismissed, each with `open`, `pin`, `dismiss`, `copy` and `rename`, and `restore` for the dismissed ones. A text box at the top takes an address you type or paste; press `Enter` and it is added pinned (the `https://` can be left off). From two floating links the FLOATING heading carries `dismiss all`, the same two-press question as the band's.
+
+`rename` opens a text box under the link: `Enter` saves the name, which from then on leads on the chip and in the list, with the address beneath it; an empty `Enter` clears the name. Renaming happens here only, never on the band.
 
 ## What is collected
 

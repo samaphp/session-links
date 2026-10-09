@@ -66,6 +66,7 @@ const sessionId = atom({ plugin: 'session-links', key: 'sessionId' } as const, '
 const links = atom({ plugin: 'session-links', key: 'links' } as const, [])
 const freshSince = atom({ plugin: 'session-links', key: 'freshSince' } as const, 0)
 const armed = atom({ plugin: 'session-links', key: 'armed' } as const, '')
+const renaming = atom({ plugin: 'session-links', key: 'renaming' } as const, '')
 
 type Engine = EngineInterface
 // `id` is the link's address: it names the link's controls wherever the chip
@@ -169,6 +170,7 @@ async function load($: Engine): Promise<void> {
 
   await update($, links, () => restored)
   await update($, armed, () => '')
+  await update($, renaming, () => '')
   // Nothing restored is news: only what arrives from here on is drawn fresh.
   await update($, freshSince, () => now)
   await update($, sessionId, () => id)
@@ -264,10 +266,59 @@ async function togglePin($: Engine, link: Link, key: string, requestId: string):
   }
 }
 
+/** How a toast names a link: by the name the person gave it, else by its address. */
+async function nameOf($: Engine, url: string, max: number): Promise<string> {
+  const name = (await read($, links)).find(link => link.url === url)?.name
+
+  return name === undefined ? labelOf(url, max) : clip(name, max)
+}
+
 async function dismiss($: Engine, url: string): Promise<void> {
+  const named = await nameOf($, url, 40)
+
   await setStatus($, url, 'dismissed')
   // The chip is gone from the band, so the way back is said where they acted.
-  $.ui.toast(`Dismissed ${labelOf(url, 40)} · /links brings it back`)
+  $.ui.toast(`Dismissed ${named} · /links brings it back`)
+}
+
+/**
+ * Opens the name field under a link's row in the list, or closes it when it
+ * is open there. The list is the only place a link is renamed: the band
+ * stays a row of chips. The field is drawn after the add box, which would
+ * otherwise keep the focus, so the ring is sent to the field by name.
+ */
+async function toggleRename($: Engine, url: string, requestId: string): Promise<void> {
+  const isOpen = (await read($, renaming)) === url
+
+  await update($, renaming, () => (isOpen ? '' : url))
+
+  if (!isOpen) {
+    const moved = await $.ui.focus({ requestId, key: 'rename' })
+
+    if (moved.deny !== undefined) {
+      $.ui.log(`the field did not take the focus: ${moved.deny}`, { to: 'debug' })
+    }
+  }
+}
+
+/** What was typed into the name field. Blank clears the name; control characters never reach a label. */
+async function rename($: Engine, url: string, text: string): Promise<void> {
+  const name = text.replace(/\p{Cc}/gu, '').trim().slice(0, 80)
+
+  await update($, renaming, () => '')
+  await update($, links, list =>
+    list.map(link => {
+      if (link.url !== url) {
+        return link
+      }
+
+      const { name: _was, ...bare } = link
+
+      return name === '' ? bare : { ...bare, name }
+    }),
+  )
+  await save($)
+  $.ui.toast(name === '' ? `Cleared the name of ${labelOf(url, 40)}` : `Named ${labelOf(url, 30)} "${clip(name, 30)}"`)
 }
 
 /**
@@ -293,7 +344,7 @@ async function addByHand($: Engine, text: string): Promise<void> {
     await setStatus($, url, 'pinned')
   }
 
-  $.ui.toast(urls.length === 1 ? `Pinned ${labelOf(urls[0] ?? '', 44)}` : `Pinned ${urls.length} links`)
+  $.ui.toast(urls.length === 1 ? `Pinned ${await nameOf($, urls[0] ?? '', 44)}` : `Pinned ${urls.length} links`)
 }
 
 /** Puts the question on `what` (one address, or ALL). One question stands at a time: asking moves it. */
@@ -357,7 +408,7 @@ async function dismissAll($: Engine): Promise<void> {
 async function copyLink($: Engine, url: string, surface: RenderSurface): Promise<void> {
   const copied = await $.ui.copy({ text: url, surface })
 
-  $.ui.toast(copied.isCopied ? `Copied ${labelOf(url, 44)}` : `This surface has no clipboard: ${url}`)
+  $.ui.toast(copied.isCopied ? `Copied ${await nameOf($, url, 44)}` : `This surface has no clipboard: ${url}`)
 }
 
 async function openInBrowser($: Engine, url: string, surface: RenderSurface): Promise<void> {
@@ -374,7 +425,7 @@ async function openInBrowser($: Engine, url: string, surface: RenderSurface): Pr
 
       if (ran.exitCode === 0) {
         // The opener took the address; whether a window then appeared is the desktop's to show.
-        $.ui.toast(`Sent ${labelOf(url, 44)} to your browser`)
+        $.ui.toast(`Sent ${await nameOf($, url, 44)} to your browser`)
 
         return
       }
@@ -530,6 +581,7 @@ function listView(
   since: number,
   isLinked: boolean,
   asked: string,
+  editing: string,
 ) {
   const { Box, Button, Link, Text } = kit
   const Field = kit.Input
@@ -545,14 +597,29 @@ function listView(
     <Box key={`row:${link.url}`} flexDirection="column" marginBottom={1}>
       <Box flexDirection="row">
         <Text color={link.url === asked ? 'error' : barOf(link, since)}>▎</Text>
-        {isLinked ? (
-          <Link href={link.url} label={` ${displayOf(link.url, width)} `} />
-        ) : (
+        {link.name !== undefined && <Text bold>{` ${clip(link.name, width)}`}</Text>}
+        {link.name === undefined && isLinked && <Link href={link.url} label={` ${displayOf(link.url, width)} `} />}
+        {link.name === undefined && !isLinked && (
           // Without hyperlinks the whole address is written once, as plain
           // text: that is what such a terminal can open on a click.
           <Text>{` ${link.url}`}</Text>
         )}
       </Box>
+      {link.name !== undefined && isLinked && <Link href={link.url} label={`  ${displayOf(link.url, width - 1)} `} />}
+      {link.name !== undefined && !isLinked && <Text dimColor>{`  ${link.url}`}</Text>}
+      {Field !== undefined && link.url === editing && (
+        <Box paddingLeft={1}>
+          <Field
+            key="rename"
+            label="name "
+            value={link.name ?? ''}
+            placeholder="a name for this link; leave empty to clear it"
+            submitLabel="save"
+            autoFocus
+            onSubmit={value => quietly($, 'name the link', () => rename($, link.url, value))}
+          />
+        </Box>
+      )}
       <Box flexDirection="row" paddingLeft={1}>
         <Button
           key={`open:${link.url}`}
@@ -584,6 +651,15 @@ function listView(
           label=" copy "
           onPress={press => quietly($, 'copy', () => copyLink($, link.url, press.surface))}
         />
+        {Field !== undefined && (
+          <Button
+            key={`rename:${link.url}`}
+            plain
+            dimColor={link.url !== editing}
+            label={link.url === editing ? ' cancel ' : ' rename '}
+            onPress={press => quietly($, 'rename', () => toggleRename($, link.url, press.requestId))}
+          />
+        )}
         {columns >= 60 && <Text dimColor>{` ${link.source === 'you' ? 'you' : 'Claude'} · ${link.mentions}×`}</Text>}
       </Box>
     </Box>
@@ -602,7 +678,8 @@ function listView(
             label="add "
             placeholder="type or paste an address"
             submitLabel="pin it"
-            autoFocus
+            // Of several fields the first drawn takes the focus: while a name is being typed, this one yields.
+            {...(editing === '' ? { autoFocus: true as const } : {})}
             onSubmit={value => quietly($, 'add the link', () => addByHand($, value))}
           />
         </Box>
@@ -840,7 +917,8 @@ export const register: Register = on => {
     const isLinked = await drawsHyperlinks($, e.surface)
 
     const asked = await read($, armed)
+    const editing = await read($, renaming)
 
-    return listView($, kit, all, columns, since, isLinked, asked)
+    return listView($, kit, all, columns, since, isLinked, asked, editing)
   })
 }
