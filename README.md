@@ -4,6 +4,14 @@ Every link your session mentions, in one row above the prompt.
 
 Paste a docs page, let Claude point you at a pull request, start a dev server: each address becomes a chip above the prompt the moment it is mentioned. Pin the ones you keep coming back to, dismiss the noise, open any of them in your browser. What you pin and dismiss is saved with the session, so it is exactly as you left it when you resume.
 
+In the terminal:
+
+![The band above the prompt in the terminal: a pinned localhost chip, then two GitHub chips, each with a star and a cross](docs/band-terminal.png)
+
+In the Claude desktop app:
+
+![The same band above the prompt box of the Claude desktop app](docs/band-desktop.png)
+
 ```
 ▎ ★  docs.claude.com   ▎ ☆  github.com/pull/12  ×   ▎ ☆  localhost:5173  ×    ≡
 ```
