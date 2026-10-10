@@ -863,7 +863,7 @@ export const register: Register = on => {
       )
     }
 
-    return (
+    const own = (
       <Box flexDirection="column">
         {rows.map((row, at) => (
           <Box key={`row:${at}`} flexDirection="row">
@@ -904,6 +904,15 @@ export const register: Register = on => {
             )}
           </Box>
         ))}
+      </Box>
+    )
+
+    // Other mods draw in this band too (status rows, confirmation controls):
+    // the links stack over whatever the rest of the chain drew instead of replacing it.
+    return (
+      <Box flexDirection="column">
+        {own}
+        {await next(e)}
       </Box>
     )
   })

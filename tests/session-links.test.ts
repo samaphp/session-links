@@ -145,6 +145,9 @@ const band = ($: Engine, columns = 120, isFullscreen = true) =>
     viewport: { columns, rows: 40, isFullscreen },
   } as never)
 
+/** The links' own rows: the band's first child, stacked over what the rest of the chain drew. */
+const ownRows = async (ui: { drawn: () => Promise<unknown> }) => ((await ui.drawn()) as { children: unknown[] }).children[0]
+
 const pane = ($: Engine) =>
   $.ui.mount({
     plugin: 'session-links',
@@ -207,7 +210,7 @@ describe('collecting', () => {
 
     // 36 cells seat one chip a row, and the count beside the last one.
     const ui = await band($, 36)
-    const drawn = (await ui.drawn()) as unknown as { children: { children: { props: { label?: string } }[] }[] }
+    const drawn = (await ownRows(ui)) as unknown as { children: { children: { props: { label?: string } }[] }[] }
 
     expect(drawn.children).toHaveLength(3)
     expect((await ui.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('open:'))).toHaveLength(3)
@@ -224,7 +227,7 @@ describe('collecting', () => {
     await say($, 'prompt', `${PULL} https://docs.github.com/en/get-started`)
 
     const ui = await band($, 52)
-    const drawn = (await ui.drawn()) as unknown as { children: unknown[] }
+    const drawn = (await ownRows(ui)) as unknown as { children: unknown[] }
 
     expect(drawn.children).toHaveLength(1)
     await ui.unmount()
@@ -236,10 +239,40 @@ describe('collecting', () => {
     await say($, 'prompt', `${DOCS} ${PULL} ${LOCAL}`)
 
     const ui = await band($, 120)
-    const drawn = (await ui.drawn()) as unknown as { children: unknown[] }
+    const drawn = (await ownRows(ui)) as unknown as { children: unknown[] }
 
     expect(drawn.children).toHaveLength(1)
     expect((await ui.find({ key: 'all' }))?.props.label).toBe(' ≡ ')
+    await ui.unmount()
+  })
+})
+
+describe('sharing the band', () => {
+  // What the rest of the chain draws (here the world's stand-in for other mods'
+  // status rows and confirmation controls) must stay whether links show or not.
+  test('with links shown, the rows drawn below stay, under the links', async ($, on) => {
+    world(on)
+    await start($)
+    await say($, 'prompt', `${DOCS} ${PULL}`)
+
+    const ui = await band($)
+    const drawn = (await ui.drawn()) as unknown as { children: unknown[] }
+
+    expect(drawn.children).toHaveLength(2)
+    expect(JSON.stringify(drawn.children[0])).not.toContain('the engine’s own')
+    expect(JSON.stringify(drawn.children[1])).toContain('the engine’s own')
+    expect((await ui.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('open:'))).toHaveLength(2)
+    await ui.unmount()
+  })
+
+  test('with no link to show, the rows drawn below are all there is', async ($, on) => {
+    world(on)
+    await start($)
+
+    const ui = await band($)
+
+    expect(JSON.stringify(await ui.drawn())).toContain('the engine’s own')
+    expect(await ui.findAll({ type: 'Button' })).toHaveLength(0)
     await ui.unmount()
   })
 })
@@ -453,7 +486,7 @@ describe('dismissing all at once', () => {
     await say($, 'prompt', ['a', 'b', 'c', 'd', 'e', 'f'].map(n => `https://${n}.example.com/`).join(' '))
 
     const ui = await band($, 80)
-    const drawn = (await ui.drawn()) as unknown as { children: { children: { type?: string; props?: { label?: string } }[] }[] }
+    const drawn = (await ownRows(ui)) as unknown as { children: { children: { type?: string; props?: { label?: string } }[] }[] }
 
     expect(drawn.children).toHaveLength(3)
     // One chip came down to share the new last row with the offer and the list control.
@@ -469,7 +502,7 @@ describe('dismissing all at once', () => {
 
     // 30 cells seat one chip a row; the third row has no room for a chip beside ` dismiss all  +3 more `.
     const ui = await band($, 30)
-    const drawn = (await ui.drawn()) as unknown as { children: { children: { type?: string; props?: { label?: string } }[] }[] }
+    const drawn = (await ownRows(ui)) as unknown as { children: { children: { type?: string; props?: { label?: string } }[] }[] }
 
     expect(drawn.children).toHaveLength(3)
     expect(drawn.children[2]?.children.map(child => child.props?.label ?? child.type)).toEqual([' dismiss all ', ' +3 more '])
